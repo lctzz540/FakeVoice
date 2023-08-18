@@ -41,7 +41,7 @@ def concat_and_split_mp3(input_folder, output_folder, num_segments):
 if __name__ == "__main__":
     input_folder = "./datavoice"
     output_folder = "./data"
-    num_segments = 32
+    num_segments = 128
 
     total_duration = calculate_total_duration(input_folder)
     segment_duration = total_duration // num_segments
