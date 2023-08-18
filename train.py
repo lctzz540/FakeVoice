@@ -3,65 +3,74 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from data import VoiceDataset
-from nets import Generator, Discriminator
+from nets import Discriminator, Generator
+
+batch_size = 4
+num_epochs = 100
+learning_rate = 0.0002
+latent_dim = 1
+fixed_duration_ms = 2000
+output_channels = 1
+hidden_dim = 64
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-input_dim = 8
-output_duration_ms = 20000
-batch_size = 32
-num_epochs = 100
-learning_rate = 0.0001
+generator = Generator(latent_dim, output_channels, hidden_dim).to(device)
+discriminator = Discriminator(output_channels, hidden_dim).to(device)
+
+optimizer_generator = optim.Adam(generator.parameters(), lr=learning_rate)
+optimizer_discriminator = optim.Adam(
+    discriminator.parameters(), lr=learning_rate)
+criterion = nn.BCELoss()
 
 
 def transform(audio):
-    return torch.tensor(audio.get_array_of_samples(), dtype=torch.float32).unsqueeze(0)
+    return torch.tensor(audio.get_array_of_samples(), dtype=torch.float32)
 
 
-data_directory = "./data"
-voice_dataset = VoiceDataset(
-    data_directory, output_duration_ms, transform=transform)
-
-dataloader = DataLoader(voice_dataset, batch_size=batch_size, shuffle=True)
-
-generator = Generator(input_dim, output_duration_ms).to(device)
-discriminator = Discriminator(output_duration_ms).to(device)
-
-criterion = nn.BCELoss()
-
-optimizer_G = optim.Adam(generator.parameters(), lr=learning_rate)
-optimizer_D = optim.Adam(discriminator.parameters(), lr=learning_rate)
+dataset = VoiceDataset(
+    data_folder="./data", fixed_duration_ms=fixed_duration_ms, transform=transform
+)
+dataloader = DataLoader(dataset, batch_size=batch_size,
+                        shuffle=True, num_workers=2)
 
 for epoch in range(num_epochs):
-    for batch_idx, real_data in enumerate(dataloader):
-        real_labels = torch.ones(batch_size, 1, device=device)
-        fake_labels = torch.zeros(batch_size, 1, device=device)
+    for real_audio_batch in dataloader:
+        real_audio_batch = real_audio_batch.unsqueeze(1).to(device)
 
-        optimizer_D.zero_grad()
-        real_output = discriminator(real_data.to(device))
-        d_real_loss = criterion(real_output, real_labels)
+        optimizer_discriminator.zero_grad()
+        real_labels = torch.ones(real_audio_batch.size(0), 11022).to(device)
+        fake_labels = torch.zeros(
+            real_audio_batch.size(0), real_audio_batch.size(2)
+        ).to(device)
 
-        noise = torch.randn(batch_size, input_dim,
-                            output_duration_ms, device=device)
-        fake_data = generator(noise)
-        fake_output = discriminator(fake_data.detach())
-        d_fake_loss = criterion(fake_output, fake_labels)
+        real_outputs = discriminator(real_audio_batch)
+        noise = torch.randn(
+            real_audio_batch.size(0), latent_dim, real_audio_batch.size(2)
+        ).to(
+            device
+        )  # Generate noise with the same sequence length
+        fake_audio_batch = generator(noise)
+        fake_outputs = discriminator(fake_audio_batch.detach())
 
-        d_loss = d_real_loss + d_fake_loss
-        d_loss.backward()
-        optimizer_D.step()
+        real_outputs = real_outputs.view(real_outputs.size(0), -1)
+        fake_outputs = fake_outputs.view(fake_outputs.size(0), -1)
 
-        optimizer_G.zero_grad()
-        fake_output = discriminator(fake_data)
-        g_loss = criterion(fake_output, real_labels)
-        g_loss.backward()
-        optimizer_G.step()
+        loss_real = criterion(real_outputs, real_labels)
+        loss_fake = criterion(fake_outputs, fake_labels)
+        loss_discriminator = loss_real + loss_fake
+        loss_discriminator.backward()
+        optimizer_discriminator.step()
 
-        if batch_idx % 100 == 0:
-            print(
-                f"Epoch [{epoch}/{num_epochs}] Batch [{batch_idx}/{len(dataloader)}] D Loss: {d_loss.item()} G Loss: {g_loss.item()}"
-            )
+        optimizer_generator.zero_grad()
+        noise = torch.randn(real_audio_batch.size(0),
+                            latent_dim, 11022).to(device)
+        fake_audio_batch = generator(noise)
+        fake_outputs = discriminator(fake_audio_batch)
+        loss_generator = criterion(fake_outputs.squeeze(), real_labels)
+        loss_generator.backward()
+        optimizer_generator.step()
 
-    with torch.no_grad():
-        noise = torch.randn(32, input_dim, output_duration_ms, device=device)
-        fake_samples = generator(noise)
+    print(
+        f"Epoch [{epoch+1}/{num_epochs}] Discriminator Loss: {loss_discriminator.item():.4f} Generator Loss: {loss_generator.item():.4f}"
+    )
