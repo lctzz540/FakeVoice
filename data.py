@@ -1,15 +1,16 @@
 import os
 from torch.utils.data import Dataset
-from pydub import AudioSegment
+import librosa
+import librosa.display
+import numpy as np
 
 
 class VoiceDataset(Dataset):
-    def __init__(self, data_folder, fixed_duration_ms, transform=None):
+    def __init__(self, data_folder, transform=None):
         self.data_folder = data_folder
         self.segment_files = [
             file for file in os.listdir(data_folder) if file.endswith(".mp3")
         ]
-        self.fixed_duration_ms = fixed_duration_ms
         self.transform = transform
 
     def __len__(self):
@@ -19,17 +20,12 @@ class VoiceDataset(Dataset):
         segment_file = self.segment_files[idx]
         segment_path = os.path.join(self.data_folder, segment_file)
 
-        audio = AudioSegment.from_mp3(segment_path)
-        audio = audio.set_channels(1)
+        y, sr = librosa.load(segment_path, sr=None)
 
-        if len(audio) > self.fixed_duration_ms:
-            audio = audio[: self.fixed_duration_ms]
-        elif len(audio) < self.fixed_duration_ms:
-            padding = self.fixed_duration_ms - len(audio)
-            silence = AudioSegment.silent(duration=padding)
-            audio = silence + audio
+        mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=8000)
+        mfccs = (mfccs - np.mean(mfccs)) / np.std(mfccs)
 
         if self.transform:
-            audio = self.transform(audio)
+            mfccs = self.transform(mfccs)
 
-        return audio
+        return mfccs
